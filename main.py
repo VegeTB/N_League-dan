@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import hashlib
+import asyncio
 from typing import Dict, List, Any, Tuple
 
 logger = logging.getLogger("MahjongDanPlugin")
@@ -261,6 +262,45 @@ class MahjongDanPlugin(Star):
 
         self._save_data()
 
+    
+        # --- 3. 升降段专属播报 (仅有人升段或降段时才单独推送) ---
+        if not events_notice:
+            return  # 如果本局没有任何人发生升段或降段，则静默，不发任何消息
+
+        # 构造升降段播报文本
+        notice_lines = [
+            "【段位变动！】",
+            "------------------------"
+        ]
+        notice_lines.extend(events_notice)
+        notice_text = "\n".join(notice_lines)
+
+        # 独立异步发送播报，排在原对局结算之后
+        async def _send_rank_change_notice():
+            await asyncio.sleep(0.5)
+            try:
+                if hasattr(event, "send"):
+                    await event.send(event.plain_result(notice_text))
+                elif hasattr(event, "bot") and hasattr(event, "message_obj"):
+                    if event.message_obj and event.message_obj.group_id:
+                        await event.bot.send_group_msg(
+                            group_id=int(event.message_obj.group_id),
+                            message=notice_text
+                        )
+                    elif event.message_obj and event.message_obj.sender:
+                        await event.bot.send_private_msg(
+                            user_id=int(event.message_obj.sender.user_id),
+                            message=notice_text
+                        )
+                else:
+                    await self.context.send_message(event.unified_msg_origin, event.plain_result(notice_text))
+            except Exception as e:
+                logger.error(f"[DanPlugin] 发送升降段播报失败: {e}")
+
+        asyncio.create_task(_send_rank_change_notice())
+        
+
+        
         # # --- 3. 构造天凤战报并优雅附加到原结算消息尾部 ---
         # dan_report_lines = [
         #     "",
@@ -341,10 +381,10 @@ class MahjongDanPlugin(Star):
         avoid_4 = (sum(ranks[:3]) / total_m) * 100
 
         msg = [
-            f"🥋 **{user['name']} 的段位档案**",
+            f"{user['name']} 的段位档案",
             f"========================",
-            f"🎖️ 当前段位: **{rank_info['name']}**{bar_str}",
-            f"📈 Rate: **R{user['rate']:.2f}** (最高: R{user.get('max_rate', user['rate']):.2f})",
+            f"🎖️ 当前段位: {rank_info['name']} {bar_str}",
+            f"📈 Rate: {user['rate']:.2f} (最高: {user.get('max_rate', user['rate']):.2f})",
             f"👑 历史最高: {max_rank_info['name']}",
             f"",
             f"📊 生涯统计 (共 {total_m} 场)",
